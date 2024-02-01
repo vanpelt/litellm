@@ -236,12 +236,17 @@ def completion(
             Part,
             GenerationConfig,
         )
+        from google.cloud import aiplatform
+        from google.protobuf import json_format
+        from google.protobuf.struct_pb2 import Value
         from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types
         import google.auth
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
         creds, _ = google.auth.default(quota_project_id=vertex_project)
-        vertexai.init(project=vertex_project, location=vertex_location, credentials=creds)
+        vertexai.init(
+            project=vertex_project, location=vertex_location, credentials=creds
+        )
 
         ## Load Config
         config = litellm.VertexAIConfig.get_config()
@@ -294,10 +299,28 @@ def completion(
             llm_model = CodeGenerationModel.from_pretrained(model)
             mode = "text"
             request_str += f"llm_model = CodeGenerationModel.from_pretrained({model})\n"
-        else:  # vertex_code_llm_models
+        elif model in litellm.vertex_code_chat_models:  # vertex_code_llm_models
             llm_model = CodeChatModel.from_pretrained(model)
             mode = "chat"
             request_str += f"llm_model = CodeChatModel.from_pretrained({model})\n"
+        else:  # assume vertex model garden
+            client_options = {
+                "api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"
+            }
+            client = aiplatform.gapic.PredictionServiceClient(
+                client_options=client_options
+            )
+            instances = [optional_params]
+            instances[0]["prompt"] = prompt
+            instances = [
+                json_format.ParseDict(instance_dict, Value())
+                for instance_dict in instances
+            ]
+            llm_model = client.endpoint_path(
+                project=vertex_project, location=vertex_location, endpoint=model
+            )
+            mode = "custom"
+            request_str += f"llm_model = client.endpoint_path(project={vertex_project}, location={vertex_location}, endpoint={model})\n"
 
         if acompletion == True:  # [TODO] expand support to vertex ai chat + text models
             if optional_params.get("stream", False) is True:
@@ -471,7 +494,34 @@ def completion(
                 },
             )
             completion_response = llm_model.predict(prompt, **optional_params).text
+        elif mode == "custom":
+            """
+            Vertex AI Model Garden
+            """
+            if "stream" in optional_params and optional_params["stream"] == True:
+                pass
 
+            request_str += (
+                f"client.predict(endpoint={llm_model}, instances={instances})\n"
+            )
+            ## LOGGING
+            logging_obj.pre_call(
+                input=prompt,
+                api_key=None,
+                additional_args={
+                    "complete_input_dict": optional_params,
+                    "request_str": request_str,
+                },
+            )
+            response = client.predict(
+                endpoint=llm_model, instances=instances
+            ).predictions
+            completion_response = response[0]
+            if (
+                isinstance(completion_response, str)
+                and "\nOutput:\n" in completion_response
+            ):
+                completion_response = completion_response.split("\nOutput:\n", 1)[1]
         ## LOGGING
         logging_obj.post_call(
             input=prompt, api_key=None, original_response=completion_response

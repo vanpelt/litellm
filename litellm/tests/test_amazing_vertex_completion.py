@@ -15,6 +15,7 @@ from litellm import RateLimitError
 import json
 import os
 import tempfile
+from typing import Union, Dict, List
 
 litellm.num_retries = 3
 litellm.cache = None
@@ -22,11 +23,14 @@ user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
 
-def load_vertex_ai_credentials():
+def load_vertex_ai_credentials(personal_account=False):
     # Define the path to the vertex_key.json file
     print("loading vertex ai credentials")
     filepath = os.path.dirname(os.path.abspath(__file__))
-    vertex_key_path = filepath + "/vertex_key.json"
+    if personal_account == False:
+        vertex_key_path = filepath + "/vertex_key.json"
+    else:
+        vertex_key_path = filepath + "/personal_account.json"
 
     # Read the existing content of the file or create an empty dictionary
     try:
@@ -47,12 +51,17 @@ def load_vertex_ai_credentials():
         service_account_key_data = {}
 
     # Update the service_account_key_data with environment variables
-    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
-    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+    if personal_account == False:
+        private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+        private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+    else:
+        private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID_2", "")
+        private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY_2", "")
     private_key = private_key.replace("\\n", "\n")
     service_account_key_data["private_key_id"] = private_key_id
     service_account_key_data["private_key"] = private_key
 
+    print(f"service_account_key_data: {service_account_key_data}")
     # Create a temporary file
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
         # Write the updated content to the temporary file
@@ -60,6 +69,79 @@ def load_vertex_ai_credentials():
 
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
+
+
+# @pytest.mark.asyncio
+# async def test_model_garden_raw():
+#     load_vertex_ai_credentials(personal_account=True)
+#     from google.cloud import aiplatform
+#     from google.protobuf import json_format
+#     from google.protobuf.struct_pb2 import Value
+
+#     def predict_custom_trained_model_sample(
+#         project: str,
+#         endpoint_id: str,
+#         instances: Union[Dict, List[Dict]],
+#         location: str = "us-east1",
+#         api_endpoint: str = "us-east1-aiplatform.googleapis.com",
+#     ):
+#         """
+#         `instances` can be either single instance of type dict or a list
+#         of instances.
+#         """
+#         # The AI Platform services require regional API endpoints.
+#         client_options = {"api_endpoint": api_endpoint}
+#         # Initialize client that will be used to create and send requests.
+#         # This client only needs to be created once, and can be reused for multiple requests.
+#         client = aiplatform.gapic.PredictionServiceClient(client_options=client_options)
+#         # The format of each instance should conform to the deployed model's prediction input schema.
+#         instances = instances if isinstance(instances, list) else [instances]
+#         instances = [
+#             json_format.ParseDict(instance_dict, Value()) for instance_dict in instances
+#         ]
+#         parameters_dict = {}
+#         parameters = json_format.ParseDict(parameters_dict, Value())
+#         endpoint = client.endpoint_path(
+#             project=project, location=location, endpoint=endpoint_id
+#         )
+#         response = client.predict(
+#             endpoint=endpoint, instances=instances, parameters=parameters
+#         )
+#         print("response")
+#         print(" deployed_model_id:", response.deployed_model_id)
+#         # The predictions are a google.protobuf.Value representation of the model's predictions.
+#         predictions = response.predictions
+#         print(f" prediction: {predictions}")
+
+#     predict_custom_trained_model_sample(
+#         project="510528649030",
+#         endpoint_id="177109333002158080",
+#         location="us-east1",
+#         instances=[
+#             {
+#                 "prompt": "My favourite condiment is",
+#                 "n": 1,
+#                 "max_tokens": 200,
+#                 "temperature": 1.0,
+#                 "top_p": 1.0,
+#                 "top_k": 10,
+#             }
+#         ],
+#     )
+
+
+@pytest.mark.asyncio
+async def test_model_garden_with_litellm():
+    load_vertex_ai_credentials(personal_account=True)
+    ## set ENV variables
+    os.environ["VERTEXAI_PROJECT"] = "510528649030"
+    os.environ["VERTEXAI_LOCATION"] = "us-east1"
+
+    response = completion(
+        model="vertex_ai/177109333002158080",
+        messages=[{"content": "Hello, how are you?", "role": "user"}],
+    )
+    print(f"response: {response}")
 
 
 @pytest.mark.asyncio
