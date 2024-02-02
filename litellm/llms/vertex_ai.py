@@ -241,6 +241,7 @@ def completion(
         from google.protobuf.struct_pb2 import Value
         from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types
         import google.auth
+        from google.cloud import aiplatform_v1
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
         creds, _ = google.auth.default(quota_project_id=vertex_project)
@@ -280,6 +281,11 @@ def completion(
 
         request_str = ""
         response_obj = None
+        async_client = None
+        instances = None
+        client_options = {
+            "api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"
+        }
         if (
             model in litellm.vertex_language_models
             or model in litellm.vertex_vision_models
@@ -304,12 +310,10 @@ def completion(
             mode = "chat"
             request_str += f"llm_model = CodeChatModel.from_pretrained({model})\n"
         else:  # assume vertex model garden
-            client_options = {
-                "api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"
-            }
             client = aiplatform.gapic.PredictionServiceClient(
                 client_options=client_options
             )
+
             instances = [optional_params]
             instances[0]["prompt"] = prompt
             instances = [
@@ -319,10 +323,11 @@ def completion(
             llm_model = client.endpoint_path(
                 project=vertex_project, location=vertex_location, endpoint=model
             )
+
             mode = "custom"
             request_str += f"llm_model = client.endpoint_path(project={vertex_project}, location={vertex_location}, endpoint={model})\n"
 
-        if acompletion == True:  # [TODO] expand support to vertex ai chat + text models
+        if acompletion == True:
             if optional_params.get("stream", False) is True:
                 # async streaming
                 return async_streaming(
@@ -337,19 +342,24 @@ def completion(
                     print_verbose=print_verbose,
                     **optional_params,
                 )
-            return async_completion(
-                llm_model=llm_model,
-                mode=mode,
-                prompt=prompt,
-                logging_obj=logging_obj,
-                request_str=request_str,
-                model=model,
-                model_response=model_response,
-                encoding=encoding,
-                messages=messages,
-                print_verbose=print_verbose,
+            data = {
+                "llm_model": llm_model,
+                "mode": mode,
+                "prompt": prompt,
+                "logging_obj": logging_obj,
+                "request_str": request_str,
+                "model": model,
+                "model_response": model_response,
+                "encoding": encoding,
+                "messages": messages,
+                "print_verbose": print_verbose,
+                "client_options": client_options,
+                "instances": instances,
+                "vertex_location": vertex_location,
+                "vertex_project": vertex_project,
                 **optional_params,
-            )
+            }
+            return async_completion(**data)
 
         if mode == "vision":
             print_verbose("\nMaking VertexAI Gemini Pro Vision Call")
@@ -499,7 +509,9 @@ def completion(
             Vertex AI Model Garden
             """
             if "stream" in optional_params and optional_params["stream"] == True:
-                pass
+                raise Exception(
+                    "Streaming not yet supported. Create an issue to track this - https://github.com/BerriAI/litellm/issues"
+                )
 
             request_str += (
                 f"client.predict(endpoint={llm_model}, instances={instances})\n"
@@ -513,8 +525,10 @@ def completion(
                     "request_str": request_str,
                 },
             )
+
             response = client.predict(
-                endpoint=llm_model, instances=instances
+                endpoint=llm_model,
+                instances=instances,
             ).predictions
             completion_response = response[0]
             if (
@@ -589,6 +603,10 @@ async def async_completion(
     encoding=None,
     messages=None,
     print_verbose=None,
+    client_options=None,
+    instances=None,
+    vertex_project=None,
+    vertex_location=None,
     **optional_params,
 ):
     """
@@ -677,7 +695,43 @@ async def async_completion(
             )
             response_obj = await llm_model.predict_async(prompt, **optional_params)
             completion_response = response_obj.text
+        elif mode == "custom":
+            """
+            Vertex AI Model Garden
+            """
+            from google.cloud import aiplatform
 
+            async_client = aiplatform.gapic.PredictionServiceAsyncClient(
+                client_options=client_options
+            )
+            llm_model = async_client.endpoint_path(
+                project=vertex_project, location=vertex_location, endpoint=model
+            )
+
+            request_str += (
+                f"client.predict(endpoint={llm_model}, instances={instances})\n"
+            )
+            ## LOGGING
+            logging_obj.pre_call(
+                input=prompt,
+                api_key=None,
+                additional_args={
+                    "complete_input_dict": optional_params,
+                    "request_str": request_str,
+                },
+            )
+
+            response_obj = await async_client.predict(
+                endpoint=llm_model,
+                instances=instances,
+            )
+            response = response_obj.predictions
+            completion_response = response[0]
+            if (
+                isinstance(completion_response, str)
+                and "\nOutput:\n" in completion_response
+            ):
+                completion_response = completion_response.split("\nOutput:\n", 1)[1]
         ## LOGGING
         logging_obj.post_call(
             input=prompt, api_key=None, original_response=completion_response
@@ -707,14 +761,12 @@ async def async_completion(
             # init prompt tokens
             # this block attempts to get usage from response_obj if it exists, if not it uses the litellm token counter
             prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
-            if response_obj is not None:
-                if hasattr(response_obj, "usage_metadata") and hasattr(
-                    response_obj.usage_metadata, "prompt_token_count"
-                ):
-                    prompt_tokens = response_obj.usage_metadata.prompt_token_count
-                    completion_tokens = (
-                        response_obj.usage_metadata.candidates_token_count
-                    )
+            if response_obj is not None and (
+                hasattr(response_obj, "usage_metadata")
+                and hasattr(response_obj.usage_metadata, "prompt_token_count")
+            ):
+                prompt_tokens = response_obj.usage_metadata.prompt_token_count
+                completion_tokens = response_obj.usage_metadata.candidates_token_count
             else:
                 prompt_tokens = len(encoding.encode(prompt))
                 completion_tokens = len(
@@ -745,6 +797,7 @@ async def async_streaming(
     request_str=None,
     messages=None,
     print_verbose=None,
+    client=None,
     **optional_params,
 ):
     """

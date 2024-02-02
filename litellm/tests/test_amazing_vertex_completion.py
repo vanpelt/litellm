@@ -77,6 +77,10 @@ def load_vertex_ai_credentials(personal_account=False):
 #     from google.cloud import aiplatform
 #     from google.protobuf import json_format
 #     from google.protobuf.struct_pb2 import Value
+#     from google.cloud import aiplatform_v1
+#     from google.protobuf import json_format
+#     from google.protobuf.struct_pb2 import Value
+#     from google.protobuf import TensorProto
 
 #     def predict_custom_trained_model_sample(
 #         project: str,
@@ -104,14 +108,39 @@ def load_vertex_ai_credentials(personal_account=False):
 #         endpoint = client.endpoint_path(
 #             project=project, location=location, endpoint=endpoint_id
 #         )
-#         response = client.predict(
-#             endpoint=endpoint, instances=instances, parameters=parameters
+
+#         content = "Hey, how's it going?"
+#         tensor_proto = TensorProto(
+#             dtype=TensorProto.DT_STRING,
+#             tensor_shape=TensorProto.TensorShapeProto(
+#                 dim=[TensorProto.TensorShapeProto.Dim(size=1)]
+#             ),
+#             string_val=[content.encode()],
 #         )
-#         print("response")
-#         print(" deployed_model_id:", response.deployed_model_id)
-#         # The predictions are a google.protobuf.Value representation of the model's predictions.
-#         predictions = response.predictions
-#         print(f" prediction: {predictions}")
+
+#         # Initialize request argument(s)
+#         request_1 = aiplatform_v1.StreamingPredictRequest(
+#             endpoint=endpoint, inputs=[tensor_proto]
+#         )
+#         requests = [request_1]
+
+#         def request_generator():
+#             for request in requests:
+#                 yield request
+
+#         model_response = client.streaming_predict(requests=request_generator())
+
+#         for response in model_response:
+#             print(response)
+
+#         # response = client.predict(
+#         #     endpoint=endpoint, instances=instances, parameters=parameters
+#         # )
+#         # print("response")
+#         # print(" deployed_model_id:", response.deployed_model_id)
+#         # # The predictions are a google.protobuf.Value representation of the model's predictions.
+#         # predictions = response.predictions
+#         # print(f" prediction: {predictions}")
 
 #     predict_custom_trained_model_sample(
 #         project="510528649030",
@@ -129,6 +158,8 @@ def load_vertex_ai_credentials(personal_account=False):
 #         ],
 #     )
 
+#     raise Exception("it worked!")
+
 
 @pytest.mark.asyncio
 async def test_model_garden_with_litellm():
@@ -137,11 +168,13 @@ async def test_model_garden_with_litellm():
     os.environ["VERTEXAI_PROJECT"] = "510528649030"
     os.environ["VERTEXAI_LOCATION"] = "us-east1"
 
-    response = completion(
+    response = await acompletion(
         model="vertex_ai/177109333002158080",
         messages=[{"content": "Hello, how are you?", "role": "user"}],
     )
     print(f"response: {response}")
+
+    raise Exception("it worked!")
 
 
 @pytest.mark.asyncio
